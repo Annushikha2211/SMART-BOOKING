@@ -1,0 +1,15 @@
+# Node dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+.vite/
+
+# Environment variables
+.env
+.env.local
+
+# Logs & Docker volumes
+*.log
+.dockerdata/
