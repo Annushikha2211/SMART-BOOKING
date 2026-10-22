@@ -129,19 +129,20 @@ app.post('/api/auth/login', async (req, res) => {
 // --- AUTH & ROLE MIDDLEWARE ---
 const authenticateToken = (req: any, res: any, next: any) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({ status: 'Error', message: 'Access token missing' });
   }
 
-  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-    if (err) {
-      return res.status(403).json({ status: 'Error', message: 'Invalid or expired token' });
-    }
-    req.user = user; // { userId, role }
+  try {
+    const secret = process.env.JWT_SECRET || 'supersecret';
+    const verifiedUser = jwt.verify(token, secret);
+    req.user = verifiedUser;
     next();
-  });
+  } catch (err) {
+    return res.status(403).json({ status: 'Error', message: 'Invalid or expired token' });
+  }
 };
 
 const requireAdmin = (req: any, res: any, next: any) => {
@@ -207,6 +208,160 @@ app.get('/api/slots/:id', authenticateToken, async (req, res) => {
   } catch (error: any) {
     console.error('Fetch slot detail error:', error);
     res.status(500).json({ status: 'Error', message: error.message });
+  }
+});
+
+// --- WEEK 3: SEAT HOLD & RESERVATION APIS ---
+
+// 1. Hold / Reserve Seats Atomically (Prevents Double Booking)
+app.post('/api/bookings/hold', authenticateToken, async (req: any, res: any) => {
+  console.log("REQ.USER:", req.user); 
+  const { slotId, seatNumbers } = req.body; // e.g., seatNumbers = ["A1", "A2"]
+  const userId = req.user.userId;
+
+  if (!slotId || !seatNumbers || !Array.isArray(seatNumbers) || seatNumbers.length === 0) {
+    return res.status(400).json({ status: 'Error', message: 'slotId and an array of seatNumbers are required' });
+  }
+
+  try {
+    // Use interactive transaction to ensure atomicity and prevent race conditions
+    const result = await prisma.$transaction(async (tx) => {
+      // Check if all requested seats are currently AVAILABLE in this slot
+      const seats = await tx.seat.findMany({
+        where: {
+          slotId,
+          seatNumber: { in: seatNumbers },
+        },
+      });
+
+      // Helper endpoint to seed seats for a specific slot
+app.post('/api/slots/:slotId/seed-seats', authenticateToken, async (req: any, res: any) => {
+  const { slotId } = req.params;
+  const seatNumbers = ["A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "B5"];
+
+  try {
+    const seatData = seatNumbers.map((seatNumber) => ({
+      slotId,
+      seatNumber,
+      status: 'AVAILABLE' as const,
+    }));
+
+    await prisma.seat.createMany({
+      data: seatData,
+      skipDuplicates: true,
+    });
+
+    res.status(200).json({ status: 'Success', message: 'Seats seeded successfully for this slot!' });
+  } catch (error: any) {
+    res.status(500).json({ status: 'Error', message: error.message });
+  }
+});
+
+      if (seats.length !== seatNumbers.length) {
+        throw new Error('Some requested seats do not exist');
+      }
+
+      // Check if any seat is already booked or held (and hold not expired)
+      const now = new Date();
+      for (const seat of seats) {
+        if (seat.status === 'BOOKED' || (seat.status === 'HELD' && seat.heldUntil && seat.heldUntil > now)) {
+          throw new Error(`Seat ${seat.seatNumber} is already taken or held`);
+        }
+      }
+
+      // Set hold expiration time (e.g., 5 minutes from now)
+      const heldUntil = new Date(now.getTime() + 5 * 60 * 1000);
+
+      // Update seats status to HELD
+      const updatedSeats = await tx.seat.updateMany({
+        where: {
+          slotId,
+          seatNumber: { in: seatNumbers },
+        },
+        data: {
+          status: 'HELD',
+          heldUntil,
+          userId,
+        },
+      });
+
+      return { updatedSeats, heldUntil };
+    });
+
+    res.status(200).json({
+      status: 'Success',
+      message: 'Seats held successfully for 5 minutes',
+      heldUntil: result.heldUntil,
+    });
+  } catch (error: any) {
+    console.error('Hold seats error:', error);
+    res.status(400).json({ status: 'Error', message: error.message || 'Failed to hold seats' });
+  }
+});
+
+// 2. Confirm Held Seats and Create Booking
+app.post('/api/bookings/confirm', authenticateToken, async (req: any, res: any) => {
+  const { slotId, seatNumbers } = req.body;
+  const userId = req.user.userId;
+
+  if (!slotId || !seatNumbers || !Array.isArray(seatNumbers) || seatNumbers.length === 0) {
+    return res.status(400).json({ status: 'Error', message: 'slotId and seatNumbers are required' });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Verify that these seats are HELD by this specific user and hold hasn't expired
+      const seats = await tx.seat.findMany({
+        where: {
+          slotId,
+          seatNumber: { in: seatNumbers },
+        },
+      });
+
+      if (seats.length !== seatNumbers.length) {
+        throw new Error('Some requested seats do not exist');
+      }
+
+      const now = new Date();
+      for (const seat of seats) {
+        if (seat.status !== 'HELD' || seat.userId !== userId || (seat.heldUntil && seat.heldUntil < now)) {
+          throw new Error(`Seat ${seat.seatNumber} is not held by you or hold has expired`);
+        }
+      }
+
+      // Create Booking record
+      const booking = await tx.booking.create({
+        data: {
+          userId,
+          slotId,
+          status: 'CONFIRMED',
+        },
+      });
+
+      // Update seats status to BOOKED and link bookingId
+      await tx.seat.updateMany({
+        where: {
+          slotId,
+          seatNumber: { in: seatNumbers },
+        },
+        data: {
+          status: 'BOOKED',
+          heldUntil: null,
+          bookingId: booking.id,
+        },
+      });
+
+      return booking;
+    });
+
+    res.status(201).json({
+      status: 'Success',
+      message: 'Booking confirmed successfully!',
+      booking: result,
+    });
+  } catch (error: any) {
+    console.error('Confirm booking error:', error);
+    res.status(400).json({ status: 'Error', message: error.message || 'Failed to confirm booking' });
   }
 });
 
