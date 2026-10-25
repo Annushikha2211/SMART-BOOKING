@@ -1,63 +1,43 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { SeatMap } from '../components/SeatMap';
 import { BookingSummary } from '../components/BookingSummary';
-import { Event } from '../types/booking';
 
-interface SeatBookingPageProps {
-  event: Event;
-  slotId: string;
-  onBack: () => void;
-  onBookingComplete: () => void;
-}
-
-export const SeatBookingPage: React.FC<SeatBookingPageProps> = ({
-  event,
-  slotId,
-  onBack,
-  onBookingComplete,
-}) => {
+export const SeatBookingPage: React.FC = () => {
   const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const eventId = "default-event-id";
 
-  // Function jab user SeatMap se seat select/unselect karega
-  const handleSeatSelect = (seats: string[]) => {
-    setSelectedSeats(seats);
+  const handleHoldExpired = useCallback(() => {
+    setSelectedSeats([]);
+    setExpiresAt(null);
+    alert("Aapka seat hold expire ho chuka hai!");
+  }, []);
+
+  const handleBookingComplete = () => {
+    alert("Booking successful!");
   };
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Back Button & Event Info Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-        <div>
-          <button
-            onClick={onBack}
-            className="text-amber-400 hover:text-amber-300 text-sm font-semibold flex items-center gap-1 mb-1 transition"
-          >
-            ← Back to Event Discovery
-          </button>
-          <h2 className="text-2xl font-bold text-white">{event.title}</h2>
-          <p className="text-xs text-zinc-400">
-            📍 {event.location} | 🕒 {event.time}
-          </p>
-        </div>
-      </div>
-
-      {/* Main Grid Layout: Left Side SeatMap, Right Side Sticky Summary */}
+    <div className="min-h-screen bg-zinc-950 text-white p-8">
+      <h1 className="text-3xl font-bold mb-8">Select Your Seats</h1>
+      
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        {/* Left Column (2 Cols wide on desktop): Interactive Seat Map */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-6">
           <SeatMap
-            slotId={slotId}
+            eventId={eventId}
             selectedSeats={selectedSeats}
-            onSeatSelect={handleSeatSelect}
+            onSeatSelect={setSelectedSeats}
+            onHoldCreated={setExpiresAt}
           />
         </div>
 
-        {/* Right Column (1 Col wide): Sticky Summary & Timer */}
         <div className="lg:col-span-1">
           <BookingSummary
-            slotId={slotId}
+            eventId={eventId}
             selectedSeats={selectedSeats}
-            onConfirmSuccess={onBookingComplete}
+            expiresAt={expiresAt}
+            onHoldExpired={handleHoldExpired}
+            onConfirmSuccess={handleBookingComplete}
           />
         </div>
       </div>

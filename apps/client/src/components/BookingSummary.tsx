@@ -1,95 +1,77 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface BookingSummaryProps {
-  slotId: string;
+  eventId: string;
   selectedSeats: string[];
+  expiresAt: string | null;
+  onHoldExpired: () => void;
   onConfirmSuccess: () => void;
 }
 
-export const BookingSummary: React.FC<BookingSummaryProps> = ({ slotId, selectedSeats, onConfirmSuccess }) => {
-  const [timeLeft, setTimeLeft] = useState(300); // 5 minutes countdown (300 seconds)
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export const BookingSummary: React.FC<BookingSummaryProps> = ({
+  eventId,
+  selectedSeats,
+  expiresAt,
+  onHoldExpired,
+  onConfirmSuccess,
+}) => {
+  const [timeLeft, setTimeLeft] = useState<number>(0);
 
-  // Countdown timer logic
   useEffect(() => {
-    if (timeLeft <= 0) return;
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => prev - 1);
-    }, 1000);
+    if (!expiresAt) return;
+
+    const calculateTime = () => {
+      const expiryTime = new Date(expiresAt).getTime();
+      const currentTime = new Date().getTime();
+      const diffInSeconds = Math.max(0, Math.floor((expiryTime - currentTime) / 1000));
+      
+      setTimeLeft(diffInSeconds);
+
+      if (diffInSeconds <= 0) {
+        onHoldExpired();
+      }
+    };
+
+    calculateTime();
+    const timer = setInterval(calculateTime, 1000);
+
     return () => clearInterval(timer);
-  }, [timeLeft]);
+  }, [expiresAt, onHoldExpired]);
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
-
-  const handleConfirmBooking = async () => {
-    setLoading(true);
-    setError(null);
-    const token = localStorage.getItem('token');
-
-    try {
-      const response = await fetch('http://localhost:5000/api/bookings/confirm', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          slotId,
-          seatNumbers: selectedSeats
-        })
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || 'Failed to confirm booking');
-
-      alert('Booking confirmed successfully! Ticket generated.');
-      onConfirmSuccess();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const totalPrice = selectedSeats.length * 500; // Assuming ₹500 per seat
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const formattedTime = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-3xl max-w-md mx-auto space-y-6 sticky top-24 shadow-2xl">
-      <div className="flex justify-between items-center pb-4 border-b border-zinc-800">
-        <h4 className="text-white font-bold text-lg">Booking Summary</h4>
-        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs px-3 py-1.5 rounded-full font-mono font-bold animate-pulse">
-          ⏱️ Hold Expires in {formatTime(timeLeft)}
-        </div>
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 text-white">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-xl font-bold">Booking Summary</h3>
+        {expiresAt && timeLeft > 0 && (
+          <div className="px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold rounded-full flex items-center gap-1.5">
+            ⏱️ Hold Expires in {formattedTime}
+          </div>
+        )}
       </div>
 
-      <div className="space-y-3 text-sm">
-        <div className="flex justify-between text-zinc-400">
+      <div className="space-y-3 text-sm text-zinc-400 mb-6">
+        <div className="flex justify-between">
           <span>Selected Seats:</span>
-          <span className="text-white font-medium">{selectedSeats.join(', ') || 'None'}</span>
+          <span className="text-white font-medium">
+            {selectedSeats.length > 0 ? selectedSeats.join(', ') : 'None'}
+          </span>
         </div>
-        <div className="flex justify-between text-zinc-400">
-          <span>Price per seat:</span>
-          <span className="text-white font-medium">₹500</span>
-        </div>
-        <div className="flex justify-between text-zinc-400 pt-3 border-t border-zinc-800 text-base font-bold">
-          <span className="text-white">Total Amount:</span>
-          <span className="text-amber-400">₹{totalPrice}</span>
+        <div className="flex justify-between text-base font-bold text-white pt-3 border-t border-zinc-800">
+          <span>Total Amount:</span>
+          <span className="text-amber-500">₹{selectedSeats.length * 500}</span>
         </div>
       </div>
-
-      {error && <p className="text-red-400 text-xs">{error}</p>}
 
       <button
-        disabled={selectedSeats.length === 0 || loading || timeLeft <= 0}
-        onClick={handleConfirmBooking}
-        className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black font-bold py-3 rounded-2xl transition shadow-lg shadow-amber-500/20"
+        disabled={selectedSeats.length === 0}
+        onClick={onConfirmSuccess}
+        className="w-full py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-zinc-950 font-bold rounded-lg transition-colors"
       >
-        {loading ? 'Processing Payment...' : 'Proceed to Checkout & Confirm'}
+        Confirm Booking
       </button>
     </div>
   );
