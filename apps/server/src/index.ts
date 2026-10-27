@@ -1,370 +1,352 @@
 import express from 'express';
-import dotenv from 'dotenv';
+import http from 'http';
+import { Server } from 'socket.io';
 import cors from 'cors';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
-import { Pool } from 'pg';
 import Redis from 'ioredis';
+import { sendOTPEmail } from './utils/mailer';
+import { initCleanupWorker } from './utils/cleanupWorker';
+import Stripe from 'stripe';
 
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
-
-const prisma = new PrismaClient();
-
-// PostgreSQL Connection Pool
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_dummy', {
+  apiVersion: '2023-10-16' as any,
 });
 
-// Redis Connection
+const prisma = new PrismaClient();
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+// Redis connection error handler taaki server crash na ho
+redis.on('error', (err) => {
+  console.error('Redis connection error:', err.message);
+});
+
+const app = express();
+const httpServer = http.createServer(app);
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
 
 app.use(cors());
 app.use(express.json());
 
-// Health check route
-app.get('/health', async (req, res) => {
-  try {
-    const pgResult = await pool.query('SELECT NOW()');
-    await redis.set('ping', 'pong');
-    const redisResult = await redis.get('ping');
+// --- SOCKET.IO REAL-TIME CONNECTION ---
+io.on('connection', (socket) => {
+  console.log(`Client connected: ${socket.id}`);
 
-    res.status(200).json({
+  socket.on('join_slot', (slotId: string) => {
+    socket.join(`slot:${slotId}`);
+    console.log(`Socket ${socket.id} joined slot: slot:${slotId}`);
+  });
+
+  socket.on('leave_slot', (slotId: string) => {
+    socket.leave(`slot:${slotId}`);
+    console.log(`Socket ${socket.id} left slot: slot:${slotId}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`Client disconnected: ${socket.id}`);
+  });
+});
+
+// Make io accessible globally if needed in controllers
+export { io };
+
+// --- HEALTH CHECK ROUTE ---
+app.get('/health', async (_req, res) => {
+  try {
+    await redis.set('health-check', 'pong', 'EX', 30);
+    const redisResult = await redis.get('health-check');
+    return res.status(200).json({
       status: 'OK',
-      database: 'Connected',
-      postgresTime: pgResult.rows[0].now,
-      redisTest: redisResult,
+      redis: redisResult === 'pong' ? 'Connected' : 'Error',
+      timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
-    console.error('Connection error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-// --- AUTHENTICATION ROUTES ---
-
-// 1. Signup Route
-app.post('/api/auth/signup', async (req, res) => {
+// --- AUTH: SEND OTP (SIGNUP) ---
+app.post('/api/auth/send-otp', async (req: any, res: any) => {
   try {
-    const { email, password, name } = req.body;
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ status: 'Error', message: 'Email is required' });
 
-    if (!email || !password || !name) {
-      return res.status(400).json({ status: 'Error', message: 'All fields are required' });
-    }
-
-    // Check if user already exists
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
       return res.status(400).json({ status: 'Error', message: 'User already exists with this email' });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.set(`otp:signup:${email}`, otp, 'EX', 300); // 5 mins expiry
 
-    // Create user in database
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name,
-      },
-    });
+    await sendOTPEmail(email, otp, 'SIGNUP');
 
-    res.status(201).json({
-      status: 'Success',
-      message: 'User registered successfully',
-      userId: user.id,
-    });
+    return res.status(200).json({ status: 'Success', message: 'OTP sent to your email successfully!' });
   } catch (error: any) {
-    console.error('Signup error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
+    console.error('Send OTP error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-// 2. Login Route
-app.post('/api/auth/login', async (req, res) => {
+// --- AUTH: VERIFY SIGNUP OTP & REGISTER ---
+app.post('/api/auth/verify-signup-otp', async (req: any, res: any) => {
+  try {
+    const { name, email, password, otp } = req.body;
+    if (!name || !email || !password || !otp) {
+      return res.status(400).json({ status: 'Error', message: 'All fields including OTP are required' });
+    }
+
+    const savedOtp = await redis.get(`otp:signup:${email}`);
+    if (!savedOtp || savedOtp !== otp) {
+      return res.status(400).json({ status: 'Error', message: 'Invalid or expired OTP' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({
+      data: { email, password: hashedPassword, name },
+    });
+
+    await redis.del(`otp:signup:${email}`);
+
+    return res.status(201).json({ status: 'Success', message: 'Account created successfully!', userId: user.id });
+  } catch (error: any) {
+    console.error('Verify signup error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
+  }
+});
+
+// --- AUTH: LOGIN ---
+app.post('/api/auth/login', async (req: any, res: any) => {
   try {
     const { email, password } = req.body;
-
     if (!email || !password) {
       return res.status(400).json({ status: 'Error', message: 'Email and password are required' });
     }
 
-    // Find user
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
-      return res.status(400).json({ status: 'Error', message: 'Invalid email or password' });
+      return res.status(401).json({ status: 'Error', message: 'Invalid email or password' });
     }
 
-    // Compare password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      return res.status(400).json({ status: 'Error', message: 'Invalid email or password' });
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ status: 'Error', message: 'Invalid email or password' });
     }
 
-    // Generate JWT token
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET || 'supersecret', {
+      expiresIn: '7d',
+    });
 
-    res.status(200).json({
+    return res.status(200).json({
       status: 'Success',
-      message: 'Logged in successfully',
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      },
+      user: { id: user.id, name: user.name, email: user.email },
     });
   } catch (error: any) {
     console.error('Login error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-// --- AUTH & ROLE MIDDLEWARE ---
-const authenticateToken = (req: any, res: any, next: any) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ status: 'Error', message: 'Access token missing' });
-  }
-
+// --- AUTH: FORGOT PASSWORD - SEND OTP ---
+app.post('/api/auth/forgot-password', async (req: any, res: any) => {
   try {
-    const secret = process.env.JWT_SECRET || 'supersecret';
-    const verifiedUser = jwt.verify(token, secret);
-    req.user = verifiedUser;
-    next();
-  } catch (err) {
-    return res.status(403).json({ status: 'Error', message: 'Invalid or expired token' });
-  }
-};
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ status: 'Error', message: 'Email is required' });
 
-const requireAdmin = (req: any, res: any, next: any) => {
-  if (req.user && req.user.role === 'ADMIN') {
-    next();
-  } else {
-    res.status(403).json({ status: 'Error', message: 'Admin access required' });
-  }
-};
-
-// --- SLOT MANAGEMENT ROUTES ---
-
-// 1. Get all available slots (Public or Authenticated users)
-app.get('/api/slots', authenticateToken, async (req, res) => {
-  try {
-    const slots = await prisma.slot.findMany({
-      orderBy: { startTime: 'asc' },
-    });
-    res.status(200).json({ status: 'Success', slots });
-  } catch (error: any) {
-    console.error('Fetch slots error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
-  }
-});
-
-// 2. Create a slot (Admin only)
-app.post('/api/slots', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { startTime, endTime, capacity } = req.body;
-
-    if (!startTime || !endTime || !capacity) {
-      return res.status(400).json({ status: 'Error', message: 'startTime, endTime, and capacity are required' });
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(404).json({ status: 'Error', message: 'User not found with this email' });
     }
 
-    const slot = await prisma.slot.create({
-      data: {
-        startTime: new Date(startTime),
-        endTime: new Date(endTime),
-        capacity: Number(capacity),
-      },
-    });
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    await redis.set(`otp:forgot:${email}`, otp, 'EX', 300);
 
-    res.status(201).json({ status: 'Success', message: 'Slot created successfully', slot });
+    await sendOTPEmail(email, otp, 'FORGOT_PASSWORD');
+
+    return res.status(200).json({ status: 'Success', message: 'Password reset code sent to email!' });
   } catch (error: any) {
-    console.error('Create slot error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
+    console.error('Forgot password error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-// 3. Get single slot details
-app.get('/api/slots/:id', authenticateToken, async (req, res) => {
+// --- AUTH: RESET PASSWORD WITH OTP ---
+app.post('/api/auth/reset-password', async (req: any, res: any) => {
   try {
-    const { id } = req.params;
-    const slot = await prisma.slot.findUnique({
-      where: { id },
-    });
-
-    if (!slot) {
-      return res.status(404).json({ status: 'Error', message: 'Slot not found' });
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ status: 'Error', message: 'All fields are required' });
     }
 
-    res.status(200).json({ status: 'Success', slot });
+    const savedOtp = await redis.get(`otp:forgot:${email}`);
+    if (!savedOtp || savedOtp !== otp) {
+      return res.status(400).json({ status: 'Error', message: 'Invalid or expired OTP code' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await prisma.user.update({
+      where: { email },
+      data: { password: hashedPassword },
+    });
+
+    await redis.del(`otp:forgot:${email}`);
+
+    return res.status(200).json({ status: 'Success', message: 'Password reset successfully!' });
   } catch (error: any) {
-    console.error('Fetch slot detail error:', error);
-    res.status(500).json({ status: 'Error', message: error.message });
+    console.error('Reset password error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-// --- WEEK 3: SEAT HOLD & RESERVATION APIS ---
-
-// 1. Hold / Reserve Seats Atomically (Prevents Double Booking)
-app.post('/api/bookings/hold', authenticateToken, async (req: any, res: any) => {
-  console.log("REQ.USER:", req.user); 
-  const { slotId, seatNumbers } = req.body; // e.g., seatNumbers = ["A1", "A2"]
-  const userId = req.user.userId;
-
-  if (!slotId || !seatNumbers || !Array.isArray(seatNumbers) || seatNumbers.length === 0) {
-    return res.status(400).json({ status: 'Error', message: 'slotId and an array of seatNumbers are required' });
-  }
-
+// --- BOOKING: HOLD SEAT API WITH SOCKET BROADCAST ---
+app.post('/api/bookings/hold', async (req: any, res: any) => {
   try {
-    // Use interactive transaction to ensure atomicity and prevent race conditions
-    const result = await prisma.$transaction(async (tx) => {
-      // Check if all requested seats are currently AVAILABLE in this slot
-      const seats = await tx.seat.findMany({
-        where: {
-          slotId,
-          seatNumber: { in: seatNumbers },
-        },
-      });
+    const { slotId, seatNumbers } = req.body;
+    if (!slotId || !seatNumbers || !Array.isArray(seatNumbers)) {
+      return res.status(400).json({ status: 'Error', message: 'Invalid payload' });
+    }
 
-      // Helper endpoint to seed seats for a specific slot
-app.post('/api/slots/:slotId/seed-seats', authenticateToken, async (req: any, res: any) => {
-  const { slotId } = req.params;
-  const seatNumbers = ["A1", "A2", "A3", "A4", "A5", "B1", "B2", "B3", "B4", "B5"];
+    const HOLD_TIME_SECONDS = 300; // 5 Minutes TTL
 
-  try {
-    const seatData = seatNumbers.map((seatNumber) => ({
-      slotId,
-      seatNumber,
-      status: 'AVAILABLE' as const,
-    }));
+    for (const seat of seatNumbers) {
+      await redis.set(`hold:${slotId}:${seat}`, 'locked', 'EX', HOLD_TIME_SECONDS);
+    }
 
-    await prisma.seat.createMany({
-      data: seatData,
-      skipDuplicates: true,
+    io.to(`slot:${slotId}`).emit('seats_updated', {
+      seatNumbers: seatNumbers,
+      status: 'HELD',
     });
 
-    res.status(200).json({ status: 'Success', message: 'Seats seeded successfully for this slot!' });
+    const expiresAt = new Date(Date.now() + HOLD_TIME_SECONDS * 1000).toISOString();
+    return res.status(200).json({ status: 'Success', expiresAt });
   } catch (error: any) {
-    res.status(500).json({ status: 'Error', message: error.message });
+    console.error('Hold seat error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-      if (seats.length !== seatNumbers.length) {
-        throw new Error('Some requested seats do not exist');
-      }
-
-      // Check if any seat is already booked or held (and hold not expired)
-      const now = new Date();
-      for (const seat of seats) {
-        if (seat.status === 'BOOKED' || (seat.status === 'HELD' && seat.heldUntil && seat.heldUntil > now)) {
-          throw new Error(`Seat ${seat.seatNumber} is already taken or held`);
-        }
-      }
-
-      // Set hold expiration time (e.g., 5 minutes from now)
-      const heldUntil = new Date(now.getTime() + 5 * 60 * 1000);
-
-      // Update seats status to HELD
-      const updatedSeats = await tx.seat.updateMany({
-        where: {
-          slotId,
-          seatNumber: { in: seatNumbers },
-        },
-        data: {
-          status: 'HELD',
-          heldUntil,
-          userId,
-        },
-      });
-
-      return { updatedSeats, heldUntil };
-    });
-
-    res.status(200).json({
-      status: 'Success',
-      message: 'Seats held successfully for 5 minutes',
-      heldUntil: result.heldUntil,
-    });
-  } catch (error: any) {
-    console.error('Hold seats error:', error);
-    res.status(400).json({ status: 'Error', message: error.message || 'Failed to hold seats' });
-  }
-});
-
-// 2. Confirm Held Seats and Create Booking
-app.post('/api/bookings/confirm', authenticateToken, async (req: any, res: any) => {
-  const { slotId, seatNumbers } = req.body;
-  const userId = req.user.userId;
-
-  if (!slotId || !seatNumbers || !Array.isArray(seatNumbers) || seatNumbers.length === 0) {
-    return res.status(400).json({ status: 'Error', message: 'slotId and seatNumbers are required' });
-  }
-
+// --- BOOKING: CONFIRM BOOKING & SAVE TO DATABASE ---
+app.post('/api/bookings/confirm', async (req: any, res: any) => {
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      // Verify that these seats are HELD by this specific user and hold hasn't expired
-      const seats = await tx.seat.findMany({
-        where: {
-          slotId,
-          seatNumber: { in: seatNumbers },
-        },
-      });
+    const { slotId, seatNumbers } = req.body;
+    
+    // Token se userId nikal lo taaki koi mismatch na ho
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ status: 'Error', message: 'Unauthorized' });
+    }
+    const token = authHeader.split(' ')[1];
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'supersecret');
+    const userId = decoded.userId;
 
-      if (seats.length !== seatNumbers.length) {
-        throw new Error('Some requested seats do not exist');
-      }
-
-      const now = new Date();
-      for (const seat of seats) {
-        if (seat.status !== 'HELD' || seat.userId !== userId || (seat.heldUntil && seat.heldUntil < now)) {
-          throw new Error(`Seat ${seat.seatNumber} is not held by you or hold has expired`);
-        }
-      }
-
-      // Create Booking record
+    if (!slotId || !seatNumbers || !Array.isArray(seatNumbers) || seatNumbers.length === 0) {
+      return res.status(400).json({ status: 'Error', message: 'Invalid booking payload' });
+    }
+    
+const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.create({
         data: {
-          userId,
           slotId,
+          userId,
           status: 'CONFIRMED',
+          seat: seatNumbers, // Agar aapke schema mein field ka naam 'seat' hai
         },
       });
 
-      // Update seats status to BOOKED and link bookingId
-      await tx.seat.updateMany({
-        where: {
-          slotId,
-          seatNumber: { in: seatNumbers },
-        },
-        data: {
-          status: 'BOOKED',
-          heldUntil: null,
-          bookingId: booking.id,
-        },
+      io.to(`slot:${slotId}`).emit('seats_updated', {
+        seatNumbers,
+        status: 'BOOKED',
       });
 
       return booking;
     });
 
-    res.status(201).json({
+    return res.status(200).json({
       status: 'Success',
       message: 'Booking confirmed successfully!',
-      booking: result,
+      bookingId: result.id
     });
   } catch (error: any) {
     console.error('Confirm booking error:', error);
-    res.status(400).json({ status: 'Error', message: error.message || 'Failed to confirm booking' });
+    return res.status(500).json({ status: 'Error', message: error.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+// --- BOOKING: GET USER BOOKINGS HISTORY ---
+app.get('/api/bookings/my', async (req: any, res: any) => {
+  try {
+    const authHeader = req.headers.authorization;
+if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  return res.status(401).json({ status: 'Error', message: 'Unauthorized: No token provided' });
+
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'supersecret');
+    const userId = decoded.userId;
+
+    const bookings = await prisma.booking.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return res.status(200).json({ status: 'Success', bookings });
+  } catch (error: any) {
+    console.error('Fetch bookings error:', error);
+    return res.status(500).json({ status: 'Error', message: error.message });
+  }
+});
+
+// Create Stripe Checkout Session for Seats
+app.post('/api/payment/create-checkout-session', async (req: any, res: any) => {
+  try {
+    const { slotId, seatNumbers, amount } = req.body;
+
+    if (!seatNumbers || seatNumbers.length === 0) {
+      return res.status(400).json({ message: 'No seats provided' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'inr',
+            product_data: {
+              name: `Event Seats Booking`,
+              description: `Seats: ${seatNumbers.join(', ')}`,
+            },
+            unit_amount: amount * 100,
+          },
+          quantity: seatNumbers.length,
+        },
+      ],
+      mode: 'payment',
+      success_url: `${process.env.CLIENT_URL}/my-tickets?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.CLIENT_URL}/booking/${slotId}`,
+      metadata: {
+        slotId,
+        seatNumbers: JSON.stringify(seatNumbers),
+      },
+    } as any);
+
+    res.status(200).json({ id: session.id, url: session.url });
+  } catch (error: any) {
+    console.error('Stripe Error:', error);
+    res.status(500).json({ message: 'Internal Server Error', error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 5000;
+httpServer.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT} with Socket.IO support`);
+  initCleanupWorker(); // Redis TTL Expiry Worker initialized here
 });
