@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 
 interface BookingSummaryProps {
@@ -14,53 +15,102 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({
   slotId,
   selectedSeats,
   totalAmount = 500,
+  onConfirmSuccess,
 }) => {
   const [isHolding, setIsHolding] = useState(false);
   const [isHeld, setIsHeld] = useState(false);
+  const [isPaying, setIsPaying] = useState(false);
 
   const seatCount = selectedSeats.length;
   const totalPrice = totalAmount * seatCount;
 
-  // Step 1: Hold Seats Temporarily / Confirm Selection
+  // Step 1: Confirm seat selection
   const handleHoldBooking = async () => {
-    if (seatCount === 0) return;
+    if (seatCount === 0) {
+      alert('Please select at least one seat.');
+      return;
+    }
+
+    if (!slotId) {
+      alert('Slot ID is missing. Please go back and select the event again.');
+      return;
+    }
+
     setIsHolding(true);
 
     try {
-      // Yahan aap apna hold/lock API call add kar sakti hain agar required ho
+      // Current behavior: proceed to payment after selection.
+      // This does not actually hold seats in Redis or the database.
       setIsHeld(true);
+      onConfirmSuccess?.();
     } catch (error) {
-      console.error('Hold Error:', error);
-      alert('Failed to hold seats. Try again.');
+      console.error('Seat selection error:', error);
+      alert('Failed to continue. Please try again.');
     } finally {
       setIsHolding(false);
     }
   };
 
-  // Step 2: Trigger Stripe Payment
+  // Step 2: Create Stripe Checkout Session
   const handlePayment = async () => {
+    if (isPaying) return;
+
+    if (!slotId || seatCount === 0) {
+      alert('Please select a valid event and seats.');
+      return;
+    }
+
+    // Read the login token saved by the frontend.
+    const token = localStorage.getItem('token');
+
+    if (!token) {
+      alert('Login token not found. Please log in again.');
+      return;
+    }
+
+    setIsPaying(true);
+
     try {
-      const response = await fetch('http://localhost:5000/api/payment/create-checkout-session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          slotId: slotId || 'default-slot',
-          seatNumbers: selectedSeats,
-          amount: totalPrice,
-        }),
-      });
+      const response = await fetch(
+        'http://localhost:5000/api/payment/create-checkout-session',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            slotId,
+            seatNumbers: selectedSeats,
+            // Backend multiplies the per-seat price by seat count.
+            amount: totalAmount,
+          }),
+        }
+      );
 
       const data = await response.json();
 
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert(data.message || 'Failed to initiate payment');
+      if (!response.ok) {
+        throw new Error(
+          data.message || data.error || 'Failed to create payment session.'
+        );
       }
+
+      if (!data.url) {
+        throw new Error('Stripe Checkout URL was not returned.');
+      }
+
+      window.location.href = data.url;
     } catch (error) {
       console.error('Payment Error:', error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : 'Payment could not be started. Please try again.'
+      );
+
+      setIsPaying(false);
     }
   };
 
@@ -71,10 +121,12 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({
       </h3>
 
       <div className="space-y-2 text-sm text-zinc-300">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center gap-3">
           <span className="text-zinc-400">Selected Seats:</span>
-          <span className="font-semibold text-amber-500">
-            {selectedSeats.length > 0 ? selectedSeats.join(', ') : 'None'}
+          <span className="font-semibold text-amber-500 text-right">
+            {selectedSeats.length > 0
+              ? selectedSeats.join(', ')
+              : 'None'}
           </span>
         </div>
 
@@ -95,14 +147,17 @@ export const BookingSummary: React.FC<BookingSummaryProps> = ({
           disabled={seatCount === 0 || isHolding}
           className="w-full bg-amber-500 hover:bg-amber-600 text-zinc-950 font-semibold py-2.5 px-4 rounded-xl transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
         >
-          {isHolding ? 'Holding Seats...' : 'Confirm Selection'}
+          {isHolding ? 'Please wait...' : 'Confirm Selection'}
         </button>
       ) : (
         <button
           onClick={handlePayment}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 px-4 rounded-xl transition shadow-lg"
+          disabled={isPaying}
+          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 px-4 rounded-xl transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Proceed to Payment (₹{totalPrice})
+          {isPaying
+            ? 'Redirecting to Payment...'
+            : `Proceed to Payment (₹${totalPrice})`}
         </button>
       )}
     </div>

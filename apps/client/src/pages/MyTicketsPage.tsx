@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 interface Booking {
   id: string;
   slotId: string;
-  seat: string[];
+  seats: { id: string; seatNumber: string }[];
   status: string;
   createdAt: string;
 }
@@ -14,29 +14,38 @@ interface MyTicketsPageProps {
 
 export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ onBack }) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  const fetchBookings = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:5000/api/bookings/my', {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBookings(data.bookings || []);
+      }
+    } catch (err) {
+      console.error('Error fetching bookings:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchBookings = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const res = await fetch('http://localhost:5000/api/bookings/my', {
-          headers: {
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-        const data = await res.json();
-        if (res.ok) {
-          setBookings(data.bookings || []);
-        }
-      } catch (err) {
-        console.error('Error fetching bookings:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchBookings();
+    
+    // Webhook polling sync for real-time ticket appearance
+    const interval = setInterval(fetchBookings, 3000);
+    const timeout = setTimeout(() => clearInterval(interval), 15000);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
   }, []);
 
   return (
@@ -65,7 +74,7 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ onBack }) => {
               className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl space-y-4 relative overflow-hidden"
             >
               <div className="flex justify-between items-center">
-                <span className="text-xs uppercase tracking-wider text-green-400 font-bold bg-green-950/50 px-3 py-1 rounded-full border border-green-800/60">
+                <span className="text-xs uppercase tracking-wider text-green-400 font-semibold px-3 py-1 bg-green-500/10 rounded-full border border-green-500/20">
                   {booking.status}
                 </span>
                 <span className="text-xs text-zinc-500">
@@ -81,12 +90,12 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ onBack }) => {
               <div>
                 <p className="text-xs text-zinc-400 mb-1.5">Reserved Seats</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {booking.seat.map((seatNum) => (
+                  {booking.seats?.map((seat) => (
                     <span
-                      key={seatNum}
-                      className="bg-zinc-800 text-amber-400 text-xs px-2.5 py-1 rounded-md border border-zinc-700 font-semibold"
+                      key={seat.id}
+                      className="px-2.5 py-1 bg-zinc-800 border border-zinc-700 text-orange-400 font-mono text-xs rounded-lg"
                     >
-                      {seatNum}
+                      {seat.seatNumber}
                     </span>
                   ))}
                 </div>

@@ -1,6 +1,7 @@
-import React, { useState, useCallback } from 'react';
-import { SeatMap } from '../components/SeatMap';
-import { BookingSummary } from '../components/BookingSummary';
+
+import React, { useCallback, useEffect, useState } from "react";
+import { SeatMap } from "../components/SeatMap";
+import { BookingSummary } from "../components/BookingSummary";
 
 interface SeatBookingPageProps {
   event: any;
@@ -19,69 +20,92 @@ export const SeatBookingPage: React.FC<SeatBookingPageProps> = ({
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
 
-  // Seat hold expire hone par callback
+  const handleSeatSelect = useCallback((seatNumber: string) => {
+    setSelectedSeats((previous) => {
+      const current = Array.isArray(previous) ? previous : [];
+
+      if (current.includes(seatNumber)) {
+        return current.filter((seat) => seat !== seatNumber);
+      }
+
+      return [...current, seatNumber];
+    });
+  }, []);
+
+  const handleHoldCreated = useCallback((newExpiresAt: string) => {
+    setExpiresAt(newExpiresAt);
+    setNotification(null);
+  }, []);
+
   const handleHoldExpired = useCallback(() => {
     setSelectedSeats([]);
     setExpiresAt(null);
-    setNotification("Aapka seat hold expire ho chuka hai! Kripya dobara seat select karein.");
-    
-    // 4 seconds baad banner hide ho jayega
-    setTimeout(() => {
-      setNotification(null);
-    }, 4000);
+    setNotification(
+      "Aapka seat hold expire ho gaya hai. Kripya dobara seat select karein."
+    );
   }, []);
 
-  
+  useEffect(() => {
+    if (!expiresAt) return;
+
+    const expiryTime = new Date(expiresAt).getTime();
+    const delay = expiryTime - Date.now();
+
+    if (!Number.isFinite(expiryTime) || delay <= 0) {
+      handleHoldExpired();
+      return;
+    }
+
+    const timer = window.setTimeout(handleHoldExpired, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [expiresAt, handleHoldExpired]);
+
+  const totalAmount = selectedSeats.length * 500;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-8 relative">
-      {/* Top Floating Alert Banner */}
+    <main className="seat-booking-page">
+      <button type="button" onClick={onBack}>
+        ← Back
+      </button>
+
+      <h1>Book Your Seats</h1>
+
+      {event?.title && <h2>{event.title}</h2>}
+      {!event?.title && event?.name && <h2>{event.name}</h2>}
+
       {notification && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 bg-red-950/90 border border-red-800 text-red-300 px-5 py-3 rounded-xl text-xs font-semibold shadow-2xl flex items-center gap-3 animate-bounce">
-          <span>⚠️</span>
-          <span>{notification}</span>
+        <div role="status" className="booking-notification">
+          {notification}
         </div>
       )}
 
-      {/* Top Header with Back Button */}
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <button
-            onClick={onBack}
-            className="text-sm text-zinc-400 hover:text-white mb-2 flex items-center gap-1 transition-colors"
-          >
-            ← Back to Events
-          </button>
-          <h1 className="text-3xl font-bold">Select Your Seats</h1>
-          {event?.title && (
-            <p className="text-sm text-zinc-400 mt-1">{event.title}</p>
-          )}
-        </div>
-      </div>
-
-      {/* Main Grid Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        {/* Left Column: Seat Map Grid */}
-        <div className="lg:col-span-2 bg-zinc-900 border border-zinc-800 rounded-xl p-6 shadow-xl">
+      <div className="booking-layout">
+        <section className="seat-map-container">
           <SeatMap
             eventId={slotId}
             selectedSeats={selectedSeats}
-            onSeatSelect={setSelectedSeats}
-            onHoldCreated={setExpiresAt}
+            onSeatSelect={handleSeatSelect}
+            onHoldCreated={handleHoldCreated}
           />
-        </div>
+        </section>
 
-        {/* Right Column: Booking Summary & Confirm Action */}
-        <div className="lg:col-span-1">
+        <section className="booking-summary-container">
           <BookingSummary
-            eventId={slotId}
+            slotId={slotId}
             selectedSeats={selectedSeats}
-            expiresAt={expiresAt}
-            onHoldExpired={handleHoldExpired}
-            onConfirmSuccess={onBookingComplete}
+            totalAmount={totalAmount}
           />
-        </div>
+        </section>
       </div>
-    </div>
+
+      {expiresAt && (
+        <p>
+          Hold expires at:{" "}
+          {new Date(expiresAt).toLocaleTimeString()}
+        </p>
+      )}
+    </main>
   );
 };
+

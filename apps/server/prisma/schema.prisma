@@ -1,3 +1,4 @@
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -63,15 +64,16 @@ model Seat {
 }
 
 model Booking {
-  id        String   @id @default(uuid())
-  slotId    String
-  userId    String
-  seat      String[] // Scalar list array for seat numbers
-  status    String   @default("CONFIRMED")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String        @id @default(uuid())
+  slotId          String
+  userId          String?
+  paymentIntentId String?       @unique
+  amount          Int?
+  status          String        @default("PENDING")
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  user  User   @relation(fields: [userId], references: [id])
-  slot  Slot   @relation(fields: [slotId], references: [id]) // Added slot relation
-  seats Seat[] // Added seats back-relation for Seat model
+  user  User?  @relation(fields: [userId], references: [id])
+  slot  Slot   @relation(fields: [slotId], references: [id])
+  seats Seat[]
 }
