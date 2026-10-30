@@ -151,6 +151,16 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({
                     <p className="font-semibold text-amber-400">
                       ${(Number(booking.amount || 0) / 100).toFixed(2)}
                     </p>
+
+                    <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => window.print()}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-lg transition cursor-pointer"
+              >
+                📥 Download Ticket PDF
+              </button>
+            </div>
+            
                   </div>
 
                   <div>

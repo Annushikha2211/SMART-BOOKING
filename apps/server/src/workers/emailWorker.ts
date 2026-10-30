@@ -34,9 +34,8 @@ export const startEmailWorker = () => {
           <p>Enjoy your event!</p>
         `,
       };
-
-      await transporter.sendMail(mailOptions);
-      console.log(`📧 Confirmation email successfully sent to ${email} for booking ${bookingId}`);
+await transporter.sendMail(mailOptions);
+console.log(`Confirmation email successfully sent to ${email} for booking ${bookingId}`);
     },
     { connection }
   );

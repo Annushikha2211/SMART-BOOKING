@@ -4,6 +4,7 @@ import Stripe from 'stripe';
 import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { randomUUID } from 'crypto';
+import { emailQueue } from '../queues/emailQueue'; 
 
 const prisma = new PrismaClient();
 
@@ -176,6 +177,13 @@ export const handlestripeWebhook = async (
               status: 'CONFIRMED',
             },
           });
+
+          await emailQueue.add('send-confirmation', {
+  email: session.customer_email || session.customer_details?.email || 'user@example.com',
+  bookingId: booking.id,
+  seats: seats,
+  totalAmount: session.amount_total ? session.amount_total / 100 : 5,
+});
 
           const updated = await tx.seat.updateMany({
             where: {
