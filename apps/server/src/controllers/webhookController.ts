@@ -1,32 +1,35 @@
 
-import type { Request, Response } from "express";
-import Stripe from "stripe";
-import { Prisma, PrismaClient } from "@prisma/client";
-import { io } from "../index";
+import { Request, Response } from 'express';
+import Stripe from 'stripe';
+import { PrismaClient } from '@prisma/client';
+import Redis from 'ioredis';
+import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient();
 
-const stripe = new Stripe(
-  process.env.STRIPE_SECRET_KEY || "",
-  { apiVersion: "2023-10-16" as any }
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2025-01-27.acacia' as any,
+});
+
+const redis = new Redis(
+  process.env.REDIS_URL || 'redis://localhost:6379'
 );
 
-export const handleStripeWebhook = async (
+export const handlestripeWebhook = async (
   req: Request,
   res: Response
 ): Promise<void> => {
-  const signature = req.headers["stripe-signature"];
+  const signature = req.headers['stripe-signature'];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!signature || Array.isArray(signature)) {
-    res.status(400).send("Missing Stripe signature");
+  if (!signature || typeof signature !== 'string') {
+    res.status(400).send('Missing Stripe signature.');
     return;
   }
 
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!webhookSecret) {
-    console.error("STRIPE_WEBHOOK_SECRET is missing");
-    res.status(500).send("Webhook secret is not configured");
+  if (!endpointSecret) {
+    console.error('STRIPE_WEBHOOK_SECRET is missing.');
+    res.status(500).send('Webhook configuration error.');
     return;
   }
 
@@ -36,198 +39,197 @@ export const handleStripeWebhook = async (
     event = stripe.webhooks.constructEvent(
       req.body,
       signature,
-      webhookSecret
+      endpointSecret
     );
-  } catch (error) {
-    console.error("Stripe signature verification failed:", error);
-    res.status(400).send("Invalid Stripe webhook signature");
+  } catch (error: any) {
+    console.error('Stripe signature verification failed:', error.message);
+    res.status(400).send(`Webhook Error: ${error.message}`);
     return;
   }
 
-  try {
-    if (event.type !== "checkout.session.completed") {
-      res.status(200).json({ received: true });
-      return;
-    }
-
-    const session = event.data.object as Stripe.Checkout.Session;
-
-    if (session.payment_status !== "paid") {
-      res.status(200).json({
-        received: true,
-        message: "Payment is not completed",
-      });
-      return;
-    }
-
-    const slotId = session.metadata?.slotId;
-    const userId = session.metadata?.userId;
-    const rawSeatNumbers = session.metadata?.seatNumbers;
-
-    const paymentIntentId =
-      typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : session.payment_intent?.id;
-
-    if (
-      !slotId ||
-      !userId ||
-      !rawSeatNumbers ||
-      !paymentIntentId
-    ) {
-      console.error("Missing checkout metadata or payment intent", {
-        sessionId: session.id,
-        slotId,
-        userId,
-        hasSeatNumbers: Boolean(rawSeatNumbers),
-        paymentIntentId,
-      });
-
-      res.status(400).json({
-        received: false,
-        message: "Required payment metadata is missing",
-      });
-      return;
-    }
-
-    let seatNumbers: string[];
-
-    try {
-      const parsed: unknown = JSON.parse(rawSeatNumbers);
-
-      if (
-        !Array.isArray(parsed) ||
-        parsed.length === 0 ||
-        !parsed.every(
-          (seat): seat is string =>
-            typeof seat === "string" && seat.trim().length > 0
-        )
-      ) {
-        throw new Error("Invalid seat numbers");
-      }
-
-      seatNumbers = [...new Set(parsed)];
-
-      if (seatNumbers.length !== parsed.length) {
-        throw new Error("Duplicate seat numbers in payment metadata");
-      }
-    } catch (error) {
-      console.error("Invalid seat metadata:", error);
-      res.status(400).json({
-        received: false,
-        message: "Invalid seat numbers",
-      });
-      return;
-    }
-
-    const booking = await prisma.$transaction(
-      async (tx) => {
-        // paymentIntentId is the existing schema field.
-        // findFirst works even if this field is not marked unique.
-        const existingBooking = await tx.booking.findFirst({
-          where: { paymentIntentId },
-        });
-
-        if (existingBooking) {
-          return existingBooking;
-        }
-
-        const user = await tx.user.findUnique({
-          where: { id: userId },
-          select: { id: true },
-        });
-
-        if (!user) {
-          throw new Error("Booking user does not exist");
-        }
-
-        const slot = await tx.slot.findUnique({
-          where: { id: slotId },
-          select: { id: true },
-        });
-
-        if (!slot) {
-          throw new Error("Booking slot does not exist");
-        }
-
-        const seats = await tx.seat.findMany({
-          where: {
-            slotId,
-            seatNumber: { in: seatNumbers },
-          },
-        });
-
-        // 1. Check if seats exist
-if (seats.length !== seatNumbers.length) {
-  throw new Error("One or more seats do not exist");
-}
-
-// 2. Strict Hold & Expiry Race Condition Guard
-const now = new Date();
-for (const seat of seats) {
-  // Scenario A: Seat already booked by someone else
-  if (seat.status === "BOOKED") {
-    throw new Error(`Seat ${seat.seatNumber} is already booked.`);
+  // We only process completed Checkout sessions here.
+  if (event.type !== 'checkout.session.completed') {
+    res.status(200).json({ received: true, ignored: true });
+    return;
   }
 
-  // Scenario B: Hold expired before payment completed
-  if (seat.status === "HELD" && seat.heldUntil && seat.heldUntil < now) {
-    throw new Error(`Hold for seat ${seat.seatNumber} has expired.`);
-  }
+  const session = event.data.object as Stripe.Checkout.Session;
 
-  // Scenario C: Seat was held by a different user/session
-  if (seat.userId && seat.userId !== userId) {
-    throw new Error(`Seat ${seat.seatNumber} is held by another user.`);
-  }
-}
-
-        const createdBooking = await tx.booking.create({
-          data: {
-            user: { connect: { id: userId } },
-            slot: { connect: { id: slotId } },
-            status: "CONFIRMED",
-            paymentIntentId,
-          },
-        });
-
-        await tx.seat.updateMany({
-          where: {
-            id: { in: seats.map((seat) => seat.id) },
-          },
-          data: {
-            status: "BOOKED",
-            bookingId: createdBooking.id,
-          },
-        });
-
-        return createdBooking;
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      }
-    );
-
-    io.to(`slot:${slotId}`).emit("seats_updated", {
-      seatNumbers,
-      status: "BOOKED",
-    });
-
-    console.log("Booking confirmed:", booking.id);
-
+  if (session.payment_status !== 'paid') {
     res.status(200).json({
       received: true,
-      bookingId: booking.id,
+      message: 'Checkout session is not paid.',
     });
+    return;
+  }
+
+  const { slotId, userId, seats: seatsString } = session.metadata || {};
+
+  if (!slotId || !userId || !seatsString) {
+    console.error('Required Stripe metadata missing:', session.metadata);
+    res.status(400).send('Required checkout metadata is missing.');
+    return;
+  }
+
+  let seats: string[];
+
+  try {
+    const parsed: unknown = JSON.parse(seatsString);
+
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((seat) => typeof seat === 'string' && seat.trim()) ||
+      new Set(parsed).size !== parsed.length
+    ) {
+      throw new Error('Invalid seats metadata.');
+    }
+
+    seats = parsed;
   } catch (error) {
-    console.error("Stripe webhook booking error:", error);
+    console.error('Invalid seats metadata:', error);
+    res.status(400).send('Invalid seats metadata.');
+    return;
+  }
+
+  const paymentIntentId =
+    typeof session.payment_intent === 'string'
+      ? session.payment_intent
+      : session.payment_intent?.id || null;
+
+  const processedKey = `webhook:processed:${event.id}`;
+  const lockKey = `webhook:lock:${event.id}`;
+  const lockToken = randomUUID();
+
+  try {
+    const alreadyProcessed = await redis.get(processedKey);
+
+    if (alreadyProcessed) {
+      res.status(200).json({ received: true, duplicate: true });
+      return;
+    }
+
+    const lock = await redis.set(lockKey, lockToken, 'EX', 90, 'NX');
+
+    if (!lock) {
+      res.status(409).json({
+        received: false,
+        message: 'Webhook is already being processed. Retry later.',
+      });
+      return;
+    }
+
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          // Prevent duplicate bookings if Stripe retries an event.
+          if (paymentIntentId) {
+            const existingBooking = await tx.booking.findUnique({
+              where: { paymentIntentId },
+            });
+
+            if (existingBooking) {
+              return;
+            }
+          }
+
+          const user = await tx.user.findUnique({
+            where: { id: userId },
+            select: { id: true },
+          });
+
+          if (!user) {
+            throw new Error(`User does not exist: ${userId}`);
+          }
+
+          const slot = await tx.slot.findUnique({
+            where: { id: slotId },
+            select: { id: true },
+          });
+
+          if (!slot) {
+            throw new Error(`Slot does not exist: ${slotId}`);
+          }
+
+          const heldSeats = await tx.seat.findMany({
+            where: {
+              slotId,
+              seatNumber: { in: seats },
+              status: 'HELD',
+              userId,
+            },
+            select: { seatNumber: true },
+          });
+
+          if (heldSeats.length !== seats.length) {
+            throw new Error(
+              'Paid session could not be matched to all held seats. Manual reconciliation is required.'
+            );
+          }
+
+          const booking = await tx.booking.create({
+            data: {
+              userId,
+              slotId,
+              amount: session.amount_total ?? 0,
+              paymentIntentId,
+              status: 'CONFIRMED',
+            },
+          });
+
+          const updated = await tx.seat.updateMany({
+            where: {
+              slotId,
+              seatNumber: { in: seats },
+              status: 'HELD',
+              userId,
+            },
+            data: {
+              status: 'BOOKED',
+              bookingId: booking.id,
+              heldUntil: null,
+            },
+          });
+
+          if (updated.count !== seats.length) {
+            throw new Error('Not all seats could be marked as booked.');
+          }
+
+          console.log(
+            `Booking ${booking.id} created for user ${userId}.`
+          );
+        },
+        { maxWait: 10000, timeout: 20000 }
+      );
+
+      // Mark processed only after the database transaction succeeds.
+      await redis.set(processedKey, 'true', 'EX', 86400);
+
+      res.status(200).json({
+        received: true,
+        bookingCreated: true,
+      });
+    } catch (error) {
+      console.error('Webhook booking transaction failed:', error);
+
+      res.status(500).json({
+        received: false,
+        error: 'Booking could not be saved. Stripe may retry this event.',
+      });
+    } finally {
+      // Release only the lock created by this request.
+      const currentLock = await redis.get(lockKey);
+
+      if (currentLock === lockToken) {
+        await redis.del(lockKey);
+      }
+    }
+  } catch (error) {
+    console.error('Webhook processing error:', error);
 
     res.status(500).json({
       received: false,
-      message: "Could not confirm booking",
+      error: 'Webhook processing failed.',
     });
   }
 };
-
-
-
-

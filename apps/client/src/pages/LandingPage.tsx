@@ -1,157 +1,169 @@
-import React from 'react';
-import { Event } from '../types/booking';
+
+import React, { useEffect, useState } from 'react';
+import { Event, Slot } from '../types/booking';
 
 interface LandingPageProps {
   onSelectEvent: (event: Event) => void;
 }
 
-const POPULAR_EVENTS: Event[] = [
-  {
-    id: 'e1',
-    title: 'Primal Scream + The Jesus and Mary Chain',
-    category: 'Concert',
-    date: 'Sep 03',
-    time: '10:00 PM',
-    location: 'Crystal Palace Bowl, Adelaide',
-    image: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=800&q=80',
-    minPrice: 35.00,
-  },
-  {
-    id: 'e2',
-    title: 'Amicorum',
-    category: 'Festival',
-    date: 'Sep 03',
-    time: '08:00 PM',
-    location: 'Town Center, Melbourne',
-    image: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=800&q=80',
-    minPrice: 20.99,
-  },
-  {
-    id: 'e3',
-    title: 'Tomorrowland',
-    category: 'EDM Fest',
-    date: 'Sep 03',
-    time: '06:00 PM',
-    location: 'Crystal Palace Bowl, Adelaide',
-    image: 'https://images.unsplash.com/photo-1501386761578-eac5c94b800a?auto=format&fit=crop&w=800&q=80',
-    minPrice: 50.00,
-  },
-  {
-    id: 'e4',
-    title: 'Sunburning',
-    category: 'Concert',
-    date: 'Sep 03',
-    time: '09:00 PM',
-    location: 'Crystal Palace Bowl, Adelaide',
-    image: 'https://images.unsplash.com/photo-1465847899084-d164df4dedc6?auto=format&fit=crop&w=800&q=80',
-    minPrice: 35.00,
-  },
-];
+const API_URL = 'http://localhost:5000';
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onSelectEvent }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({
+  onSelectEvent,
+}) => {
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const fetchSlots = async () => {
+      try {
+        setLoading(true);
+        setError('');
+
+        const response = await fetch(`${API_URL}/api/slots`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.message || 'Could not load slots.');
+        }
+
+        setSlots(Array.isArray(data.slots) ? data.slots : []);
+      } catch (err: any) {
+        console.error('Fetch slots error:', err);
+        setError(err.message || 'Something went wrong.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSlots();
+  }, []);
+
+  const selectSlot = (slot: Slot) => {
+    const event: Event = {
+      id: slot.id,
+      slotId: slot.id,
+      title: 'RizzTix Booking',
+      date: new Date(slot.startTime).toLocaleDateString(),
+      time: new Date(slot.startTime).toLocaleTimeString(),
+      location: 'Available booking slot',
+      category: 'Booking',
+      minPrice: 5,
+    };
+
+    onSelectEvent(event);
+  };
+
   return (
-    <div className="space-y-10 pb-16">
-      {/* Hero Banner (Exact RizzTix Style) */}
-      <div className="relative rounded-3xl overflow-hidden h-[420px] flex items-end p-10 border border-zinc-800 shadow-2xl bg-zinc-950">
-        <img 
-          src="https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=1600&q=80" 
-          alt="Featured Concert" 
-          className="absolute inset-0 w-full h-full object-cover brightness-[0.4]"
-        />
-        
-        {/* Gradient overlay on right */}
-        <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 to-transparent"></div>
+    <div className="space-y-8 pb-16">
+      <div className="relative rounded-3xl overflow-hidden min-h-[320px] flex items-center p-8 md:p-10 border border-zinc-800 bg-zinc-950">
+        <div className="absolute inset-0 bg-gradient-to-r from-orange-950 via-zinc-950 to-black" />
 
-        <div className="relative z-10 space-y-3 max-w-xl">
-          <div className="flex items-center gap-2">
-            <span className="bg-amber-400 text-black text-[11px] font-extrabold px-2.5 py-0.5 rounded shadow">
-              Sep 03
-            </span>
-            <span className="bg-zinc-900/80 border border-zinc-700 text-zinc-300 text-[11px] font-semibold px-2.5 py-0.5 rounded">
-              Concert
-            </span>
-            <span className="bg-zinc-900/80 border border-zinc-700 text-zinc-300 text-[11px] font-semibold px-2.5 py-0.5 rounded">
-              BGM
-            </span>
-          </div>
+        <div className="relative z-10 max-w-xl space-y-4">
+          <span className="text-orange-400 font-bold text-xs tracking-widest">
+            RIZZ TIX
+          </span>
 
-          <h1 className="text-3xl lg:text-4xl font-black text-white tracking-tight leading-tight">
-            Primal Scream + The Jesus and Mary Chain
+          <h1 className="text-3xl md:text-5xl font-black text-white">
+            Book Your Seats.
+            <span className="text-orange-500"> Live.</span>
           </h1>
 
-          <p className="text-xs text-zinc-300 flex items-center gap-2">
-            <span>🕒 10:00 PM to 05:00 AM</span>
-            <span>•</span>
-            <span>🌐 English</span>
+          <p className="text-zinc-300 text-sm">
+            Choose an available slot, select your seats and complete your booking.
           </p>
 
-          <p className="text-xs text-zinc-400">
-            Crystal Palace Bowl, 2ADK8H , Adelaide, AU
-          </p>
-
-          <div className="pt-2">
-            <button 
-              onClick={() => onSelectEvent(POPULAR_EVENTS[0])}
-              className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-black font-extrabold px-6 py-2.5 rounded-xl text-xs transition shadow-lg shadow-orange-500/30"
-            >
-              Book Now
-            </button>
-          </div>
-
-          {/* Carousel Dots */}
-          <div className="flex gap-1.5 pt-2">
-            <span className="w-4 h-1.5 bg-orange-500 rounded-full"></span>
-            <span className="w-1.5 h-1.5 bg-zinc-600 rounded-full"></span>
-            <span className="w-1.5 h-1.5 bg-zinc-600 rounded-full"></span>
-          </div>
+          <a
+            href="#available-slots"
+            className="inline-block bg-orange-500 hover:bg-orange-600 text-black font-bold px-6 py-3 rounded-xl transition"
+          >
+            Explore Slots
+          </a>
         </div>
       </div>
 
-      {/* Popular Events Section */}
-      <div className="space-y-4">
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-extrabold text-white tracking-wide">POPULAR</h2>
-            <span className="text-orange-500 font-bold">→</span>
-          </div>
-          <button className="text-xs text-zinc-400 hover:text-white transition">Explore the most popular events near you</button>
+      <section id="available-slots" className="space-y-5">
+        <div>
+          <h2 className="text-xl font-extrabold text-white">
+            AVAILABLE SLOTS
+          </h2>
+          <p className="text-sm text-zinc-400 mt-1">
+            These slots are loaded directly from your database.
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {POPULAR_EVENTS.map((event) => (
-            <div
-              key={event.id}
-              onClick={() => onSelectEvent(event)}
-              className="bg-zinc-900/90 border border-zinc-800/80 rounded-2xl overflow-hidden hover:border-orange-500/50 hover:scale-[1.02] transition duration-300 cursor-pointer group flex flex-col justify-between shadow-lg"
-            >
-              <div className="relative h-36 overflow-hidden">
-                <img 
-                  src={event.image} 
-                  alt={event.title} 
-                  className="w-full h-full object-cover group-hover:scale-110 transition duration-500"
-                />
-                <div className="absolute top-2.5 left-2.5 bg-amber-400 text-black text-[10px] font-extrabold px-2 py-0.5 rounded shadow">
-                  {event.date}
-                </div>
-              </div>
+        {loading && (
+          <p className="text-zinc-300">Loading available slots...</p>
+        )}
 
-              <div className="p-3.5 space-y-2 flex flex-col justify-between flex-grow">
+        {error && (
+          <div className="bg-red-950/40 border border-red-800 rounded-xl p-4 text-red-300">
+            {error}
+          </div>
+        )}
+
+        {!loading && !error && slots.length === 0 && (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center">
+            <h3 className="text-white font-bold text-lg">
+              No upcoming slots found
+            </h3>
+            <p className="text-zinc-400 text-sm mt-2">
+              Create a future Slot and its Seat records in your database first.
+            </p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {slots.map((slot) => {
+            const availableSeats = (slot as any).availableSeats ?? 0;
+
+            return (
+              <div
+                key={slot.id}
+                className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4"
+              >
                 <div>
-                  <h3 className="text-sm font-bold text-white group-hover:text-amber-400 transition line-clamp-1">{event.title}</h3>
-                  <p className="text-[11px] text-zinc-400 mt-0.5 truncate">{event.location}</p>
+                  <span className="text-orange-400 text-xs font-bold">
+                    DATABASE SLOT
+                  </span>
+
+                  <h3 className="text-white text-lg font-bold mt-2">
+                    RizzTix Booking Slot
+                  </h3>
+
+                  <p className="text-zinc-400 text-sm mt-2">
+                    Starts: {new Date(slot.startTime).toLocaleString()}
+                  </p>
+
+                  <p className="text-zinc-400 text-sm">
+                    Ends: {new Date(slot.endTime).toLocaleString()}
+                  </p>
                 </div>
 
-                <div className="pt-2 border-t border-zinc-800 flex justify-between items-center">
-                  <span className="text-xs font-extrabold text-white">₹ {event.minPrice.toFixed(2)}</span>
-                  <span className="bg-orange-500 hover:bg-orange-600 text-black text-[10px] font-bold px-3 py-1.5 rounded-lg transition">
-                    Book Now
+                <div className="flex justify-between text-sm border-t border-zinc-800 pt-4">
+                  <span className="text-zinc-400">
+                    Capacity: {slot.capacity}
+                  </span>
+
+                  <span className="text-green-400 font-bold">
+                    Available: {availableSeats}
                   </span>
                 </div>
+
+                <button
+                  type="button"
+                  disabled={availableSeats === 0}
+                  onClick={() => selectSlot(slot)}
+                  className="w-full bg-orange-500 hover:bg-orange-600 disabled:bg-zinc-700 disabled:text-zinc-400 text-black font-bold py-3 rounded-xl transition"
+                >
+                  {availableSeats === 0 ? 'Sold Out' : 'Select Seats'}
+                </button>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
-      </div>
+      </section>
     </div>
   );
 };

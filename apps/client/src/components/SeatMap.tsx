@@ -1,341 +1,256 @@
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { io, Socket } from "socket.io-client";
-
-const API_URL = "http://localhost:5000";
-
-type SeatStatus = "AVAILABLE" | "HELD" | "BOOKED";
+import React, { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
 
 interface Seat {
   id: string;
   seatNumber: string;
-  status: SeatStatus;
-  userId?: string | null;
-  bookingId?: string | null;
+  status: 'AVAILABLE' | 'HELD' | 'BOOKED';
   heldUntil?: string | null;
+  userId?: string | null;
 }
 
 interface SeatMapProps {
-  eventId: string;
+  eventid: string;
   selectedSeats: string[];
   onSeatSelect: (seatNumber: string) => void;
-  onHoldCreated?: (expiresAt: string) => void;
+  onHoldCreated: (expiresAt: string) => void;
 }
 
-function getToken(): string | null {
-  return localStorage.getItem("token");
-}
+const API_URL = 'http://localhost:5000';
 
-async function readError(response: Response): Promise<string> {
-  try {
-    const data = await response.json();
-    return data.message || data.error || "Request failed";
-  } catch {
-    return `Request failed (${response.status})`;
-  }
-}
+const socket = io(API_URL, {
+  autoConnect: true,
+  transports: ['websocket'],
+});
 
-export function SeatMap({
-  eventId,
+export const SeatMap: React.FC<SeatMapProps> = ({
+  eventid,
   selectedSeats,
   onSeatSelect,
   onHoldCreated,
-}: SeatMapProps) {
+}) => {
   const [seats, setSeats] = useState<Seat[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [busySeat, setBusySeat] = useState<string | null>(null);
-
-  const selectedRef = useRef(selectedSeats);
-  const socketRef = useRef<Socket | null>(null);
+  const [processingSeat, setProcessingSeat] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    selectedRef.current = selectedSeats;
-  }, [selectedSeats]);
-
-  const fetchSeats = useCallback(async () => {
-    if (!eventId) {
-      setError("Slot ID is missing.");
+    if (!eventid) {
+      setError('Slot ID is missing.');
       setLoading(false);
       return;
     }
 
-    try {
-      setError("");
+    let active = true;
 
-      const response = await fetch(
-        `${API_URL}/api/slots/${encodeURIComponent(eventId)}/seats`
-      );
+    const fetchSeats = async () => {
+      try {
+        setLoading(true);
+        setError('');
 
-      if (!response.ok) {
-        throw new Error(await readError(response));
+        const response = await fetch(
+          `${API_URL}/api/slots/${eventid}/seats`
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.message || 'Could not load seats.');
+        }
+
+        if (active) {
+          setSeats(Array.isArray(data.seats) ? data.seats : []);
+        }
+      } catch (err: any) {
+        if (active) {
+          setError(err.message || 'Could not load seats.');
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
       }
-
-      const data = await response.json();
-
-      // Supports either { seats: [...] } or a direct array response.
-      const rows: Seat[] = Array.isArray(data)
-        ? data
-        : Array.isArray(data.seats)
-          ? data.seats
-          : [];
-
-      const now = Date.now();
-
-      const normalized = rows.map((seat) => {
-        let status = String(seat.status || "AVAILABLE").toUpperCase();
-
-        // Treat expired holds as available in the UI.
-        // The backend remains responsible for validating and releasing them.
-        if (
-          status === "HELD" &&
-          seat.heldUntil &&
-          new Date(seat.heldUntil).getTime() <= now
-        ) {
-          status = "AVAILABLE";
-        }
-
-        if (!["AVAILABLE", "HELD", "BOOKED"].includes(status)) {
-          status = "AVAILABLE";
-        }
-
-        return {
-          ...seat,
-          status: status as SeatStatus,
-        };
-      });
-
-      setSeats(normalized);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not load seats."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [eventId]);
-
-  // Load the actual database seat statuses when the slot changes.
-  useEffect(() => {
-    setLoading(true);
-    void fetchSeats();
-  }, [fetchSeats]);
-
-  // Keep the map in sync with other users' seat updates.
-  useEffect(() => {
-    const socket = io(API_URL);
-    socketRef.current = socket;
-
-    socket.emit("join_slot", eventId);
-
-    const handleSeatsUpdated = () => {
-      void fetchSeats();
     };
 
-    socket.on("seats_updated", handleSeatsUpdated);
+    fetchSeats();
+
+    socket.emit('join_slot', eventid);
+
+    const handleSeatsUpdated = (updatedData: {
+      seatNumbers: string[];
+      status: 'AVAILABLE' | 'HELD' | 'BOOKED';
+      heldUntil?: string;
+    }) => {
+      if (!Array.isArray(updatedData.seatNumbers)) return;
+
+      setSeats((previous) =>
+        previous.map((seat) =>
+          updatedData.seatNumbers.includes(seat.seatNumber)
+            ? {
+                ...seat,
+                status: updatedData.status,
+                heldUntil: updatedData.heldUntil ?? null,
+              }
+            : seat
+        )
+      );
+    };
+
+    socket.on('seats_updated', handleSeatsUpdated);
 
     return () => {
-      socket.off("seats_updated", handleSeatsUpdated);
-      socket.emit("leave_slot", eventId);
-      socket.disconnect();
-      socketRef.current = null;
+      active = false;
+      socket.off('seats_updated', handleSeatsUpdated);
+      socket.emit('leave_slot', eventid);
     };
-  }, [eventId, fetchSeats]);
+  }, [eventid]);
 
   const handleSeatClick = async (seat: Seat) => {
-    if (busySeat || loading) return;
-
-    const token = getToken();
+    const token = localStorage.getItem('token');
 
     if (!token) {
-      setError("Please log in before selecting seats.");
+      setError('Please login before selecting seats.');
       return;
     }
 
-    const isSelected = selectedRef.current.includes(seat.seatNumber);
+    if (processingSeat) return;
 
-    if (!isSelected && seat.status !== "AVAILABLE") {
-      setError(
-        seat.status === "BOOKED"
-          ? `${seat.seatNumber} is already booked.`
-          : `${seat.seatNumber} is currently held.`
-      );
+    const isSelected = selectedSeats.includes(seat.seatNumber);
+
+    if (!isSelected && seat.status !== 'AVAILABLE') {
+      setError('This seat is no longer available.');
       return;
     }
-
-    setBusySeat(seat.seatNumber);
-    setError("");
 
     try {
-      const endpoint = isSelected
-        ? "/api/bookings/release"
-        : "/api/bookings/hold";
+      setProcessingSeat(seat.seatNumber);
+      setError('');
 
-      const response = await fetch(`${API_URL}${endpoint}`, {
-        method: "POST",
+      const endpoint = isSelected
+        ? `${API_URL}/api/bookings/release`
+        : `${API_URL}/api/bookings/hold`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          slotId: eventId,
+          slotId: eventid,
           seatNumbers: [seat.seatNumber],
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(await readError(response));
-      }
-
       const data = await response.json();
 
+      if (!response.ok) {
+        throw new Error(
+          data.message || data.error || 'Could not update seat selection.'
+        );
+      }
+
       if (isSelected) {
-        // Remove the seat from the parent selection only after release succeeds.
         onSeatSelect(seat.seatNumber);
 
-        setSeats((current) =>
-          current.map((item) =>
+        setSeats((previous) =>
+          previous.map((item) =>
             item.seatNumber === seat.seatNumber
               ? {
                   ...item,
-                  status: "AVAILABLE",
-                  userId: null,
+                  status: 'AVAILABLE',
                   heldUntil: null,
+                  userId: null,
                 }
               : item
           )
         );
       } else {
-        // Add the seat to the parent selection only after hold succeeds.
-        onSeatSelect(seat.seatNumber);
+        if (!data.expiresAt) {
+          throw new Error('Server did not return hold expiry time.');
+        }
 
-        setSeats((current) =>
-          current.map((item) =>
+        onSeatSelect(seat.seatNumber);
+        onHoldCreated(data.expiresAt);
+
+        setSeats((previous) =>
+          previous.map((item) =>
             item.seatNumber === seat.seatNumber
               ? {
                   ...item,
-                  status: "HELD",
-                  heldUntil: data.expiresAt ?? null,
+                  status: 'HELD',
+                  heldUntil: data.expiresAt,
                 }
               : item
           )
         );
-
-        if (data.expiresAt) {
-          onHoldCreated?.(data.expiresAt);
-        }
       }
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not update this seat."
-      );
-
-      // Re-read server state after a failed hold or release.
-      await fetchSeats();
+    } catch (err: any) {
+      console.error('Seat selection error:', err);
+      setError(err.message || 'Something went wrong.');
     } finally {
-      setBusySeat(null);
+      setProcessingSeat(null);
     }
   };
 
   if (loading) {
-    return <p>Loading seats from database...</p>;
-  }
-
-  if (seats.length === 0) {
     return (
-      <div>
-        <p>No seats were returned for this slot.</p>
-        {error && <p role="alert">{error}</p>}
-        <button type="button" onClick={() => void fetchSeats()}>
-          Retry
-        </button>
+      <div className="bg-white p-6 rounded-xl">
+        Loading seats...
       </div>
     );
   }
 
   return (
-    <section>
-      <h2>Select your seats</h2>
-
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "12px",
-          marginBottom: "16px",
-          fontSize: "14px",
-        }}
-      >
-        <span>🟩 Available</span>
-        <span>🟨 Held / selected</span>
-        <span>🟥 Booked</span>
-      </div>
+    <div className="bg-white p-6 rounded-xl shadow-md border">
+      <h3 className="text-xl font-bold mb-4">Select Your Seats</h3>
 
       {error && (
-        <p role="alert" style={{ color: "crimson", marginBottom: "12px" }}>
+        <p className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">
           {error}
         </p>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(8, minmax(36px, 1fr))",
-          gap: "8px",
-          maxWidth: "520px",
-        }}
-      >
-        {seats.map((seat) => {
-          const isSelected = selectedSeats.includes(seat.seatNumber);
-          const isBusy = busySeat === seat.seatNumber;
-          const isDisabled =
-            isBusy ||
-            (seat.status !== "AVAILABLE" && !isSelected);
-
-          let background = "#dcfce7";
-          if (seat.status === "BOOKED") background = "#fecaca";
-          else if (seat.status === "HELD" || isSelected) {
-            background = "#fef08a";
-          }
-
-          return (
-            <button
-              key={seat.id || `${eventId}-${seat.seatNumber}`}
-              type="button"
-              disabled={isDisabled}
-              onClick={() => void handleSeatClick(seat)}
-              title={`${seat.seatNumber}: ${seat.status}`}
-              aria-pressed={isSelected}
-              style={{
-                minHeight: "40px",
-                border: isSelected
-                  ? "2px solid #ca8a04"
-                  : "1px solid #9ca3af",
-                borderRadius: "6px",
-                background,
-                cursor: isDisabled ? "not-allowed" : "pointer",
-                opacity: isDisabled && !isSelected ? 0.65 : 1,
-                fontWeight: isSelected ? 700 : 400,
-              }}
-            >
-              {isBusy ? "..." : seat.seatNumber}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap gap-4 mb-5 text-xs">
+        <span className="text-green-700">● Available</span>
+        <span className="text-orange-600">● Selected / Held by you</span>
+        <span className="text-gray-500">● Unavailable</span>
       </div>
 
-      <p style={{ marginTop: "12px" }}>
-        Selected seats:{" "}
-        {selectedSeats.length ? selectedSeats.join(", ") : "None"}
-      </p>
+      {seats.length === 0 ? (
+        <p className="text-gray-600">
+          No seats have been created for this slot yet.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {seats.map((seat) => {
+            const isSelected = selectedSeats.includes(seat.seatNumber);
+            const isUnavailable =
+              seat.status !== 'AVAILABLE' && !isSelected;
 
-      <button
-        type="button"
-        onClick={() => void fetchSeats()}
-        style={{ marginTop: "8px" }}
-      >
-        Refresh seat availability
-      </button>
-    </section>
+            return (
+              <button
+                type="button"
+                key={seat.id}
+                disabled={isUnavailable || processingSeat !== null}
+                onClick={() => handleSeatClick(seat)}
+                className={`p-4 rounded-lg font-bold transition ${
+                  isSelected
+                    ? 'bg-orange-500 text-black'
+                    : isUnavailable
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-green-100 text-green-800 hover:bg-green-200'
+                }`}
+              >
+                {processingSeat === seat.seatNumber
+                  ? 'Please wait...'
+                  : `${seat.seatNumber} (${isSelected ? 'YOUR HOLD' : seat.status})`}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
-}
+};

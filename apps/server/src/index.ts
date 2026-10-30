@@ -11,6 +11,9 @@ import { sendOTPEmail } from './utils/mailer';
 import { initCleanupWorker } from './utils/cleanupWorker';
 import Stripe from 'stripe';
 import webhookRoutes from './routes/webhookRoutes';
+import checkoutRoutes from './routes/checkoutRoutes';
+import bookingRoutes from './routes/bookingRoutes';
+
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 const PORT = Number(process.env.PORT) || 5000;
@@ -25,6 +28,8 @@ const stripe = new Stripe(
   { apiVersion: '2023-10-16' as any }
 );
 
+
+
 const prisma = new PrismaClient();
 const redis = new Redis(
   process.env.REDIS_URL || 'redis://localhost:6379'
@@ -35,6 +40,13 @@ redis.on('error', (error) => {
 });
 
 const app = express();
+
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+}));
+
 const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
@@ -44,14 +56,17 @@ const io = new Server(httpServer, {
   },
 });
 
-app.use(cors());
+export { io };
+
+// / Stripe webhook must receive the raw request body.
+// // Keep this BEFORE express.json().
+app.use('/api/payment', webhookRoutes);
+// app.use(cors());
 app.use(express.json());
 
-// Stripe webhook must receive the raw request body.
-// Keep this BEFORE express.json().
-app.use('/api/payment', webhookRoutes);
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/checkout', checkoutRoutes);
 
-export { io };
 
 // ---------------- AUTH HELPERS ----------------
 
@@ -724,6 +739,51 @@ app.get('/api/bookings/my', async (req, res) => {
     return res.status(500).json({
       status: 'Error',
       message: 'Could not fetch bookings',
+    });
+  }
+});
+
+// GET ALL UPCOMING SLOTS
+app.get('/api/slots', async (_req, res) => {
+  try {
+    const slots = await prisma.slot.findMany({
+      where: {
+        startTime: {
+          gte: new Date(),
+        },
+      },
+      orderBy: {
+        startTime: 'asc',
+      },
+      include: {
+        seats: {
+          select: {
+            status: true,
+          },
+        },
+      },
+    });
+
+    const formattedSlots = slots.map((slot) => ({
+      id: slot.id,
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      capacity: slot.capacity,
+      availableSeats: slot.seats.filter(
+        (seat) => seat.status === 'AVAILABLE'
+      ).length,
+    }));
+
+    return res.status(200).json({
+      status: 'Success',
+      slots: formattedSlots,
+    });
+  } catch (error) {
+    console.error('Fetch slots error:', error);
+
+    return res.status(500).json({
+      status: 'Error',
+      message: 'Could not fetch slots.',
     });
   }
 });

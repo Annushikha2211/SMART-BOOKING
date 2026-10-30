@@ -1,109 +1,181 @@
+
 import React, { useEffect, useState } from 'react';
+
+interface Seat {
+  id: string;
+  seatNumber: string;
+  status: string;
+}
 
 interface Booking {
   id: string;
   slotId: string;
-  seats: { id: string; seatNumber: string }[];
+  seats: Seat[];
+  amount: number | null;
   status: string;
   createdAt: string;
 }
 
 interface MyTicketsPageProps {
-  onBack: () => void;
+  onBack?: () => void;
 }
 
-export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ onBack }) => {
+export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({
+  onBack,
+}) => {
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  const fetchBookings = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:5000/api/bookings/my', {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setBookings(data.bookings || []);
-      }
-    } catch (err) {
-      console.error('Error fetching bookings:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    fetchBookings();
-    
-    // Webhook polling sync for real-time ticket appearance
-    const interval = setInterval(fetchBookings, 3000);
-    const timeout = setTimeout(() => clearInterval(interval), 15000);
+    const fetchMyTickets = async () => {
+      try {
+        const token = localStorage.getItem('token');
 
-    return () => {
-      clearInterval(interval);
-      clearTimeout(timeout);
+        if (!token) {
+          setError('Please login to view your tickets.');
+          return;
+        }
+
+        const response = await fetch(
+          'http://localhost:5000/api/bookings/my',
+          {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.message || 'Could not load your tickets.');
+        }
+
+        setBookings(
+          Array.isArray(data.bookings) ? data.bookings : []
+        );
+      } catch (error: any) {
+        console.error('My tickets error:', error);
+        setError(error.message || 'Something went wrong.');
+      } finally {
+        setLoading(false);
+      }
     };
+
+    fetchMyTickets();
   }, []);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex items-center justify-center">
+        Loading your tickets...
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-8">
-      {/* Top Header */}
-      <button
-        onClick={onBack}
-        className="text-sm text-zinc-400 hover:text-white mb-6 flex items-center gap-1 transition-colors"
-      >
-        ← Back to Dashboard
-      </button>
+    <div className="min-h-screen bg-neutral-950 text-white p-6">
+      <div className="max-w-4xl mx-auto">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="mb-6 text-amber-400 hover:text-amber-300"
+          >
+            ← Back
+          </button>
+        )}
 
-      <h1 className="text-3xl font-bold mb-6">My Booked Tickets</h1>
+        <h1 className="text-3xl font-bold mb-2">
+          My Booked Tickets
+        </h1>
 
-      {loading ? (
-        <p className="text-zinc-400">Loading your tickets...</p>
-      ) : bookings.length === 0 ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center text-zinc-400 shadow-xl">
-          <p>Aapne abhi tak koi booking confirm nahi ki hai!</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {bookings.map((booking) => (
-            <div
-              key={booking.id}
-              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl space-y-4 relative overflow-hidden"
-            >
-              <div className="flex justify-between items-center">
-                <span className="text-xs uppercase tracking-wider text-green-400 font-semibold px-3 py-1 bg-green-500/10 rounded-full border border-green-500/20">
-                  {booking.status}
-                </span>
-                <span className="text-xs text-zinc-500">
-                  {new Date(booking.createdAt).toLocaleDateString()}
-                </span>
-              </div>
+        <p className="text-zinc-400 mb-8">
+          Your confirmed event bookings appear here.
+        </p>
 
-              <div>
-                <p className="text-xs text-zinc-400">Slot Reference</p>
-                <p className="text-sm font-mono text-zinc-200 truncate">{booking.slotId}</p>
-              </div>
+        {error ? (
+          <div className="bg-red-950/40 border border-red-800 rounded-xl p-5 text-red-300">
+            {error}
+          </div>
+        ) : bookings.length === 0 ? (
+          <div className="bg-neutral-900 border border-zinc-800 rounded-xl p-8 text-center">
+            <h2 className="text-xl font-semibold mb-2">
+              No bookings found yet.
+            </h2>
+            <p className="text-zinc-400">
+              Your confirmed tickets will appear here after payment is verified.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {bookings.map((booking) => (
+              <div
+                key={booking.id}
+                className="bg-neutral-900 border border-zinc-800 rounded-xl p-6"
+              >
+                <div className="flex flex-wrap justify-between gap-3 mb-4">
+                  <div>
+                    <p className="text-sm text-zinc-400">
+                      Booking ID
+                    </p>
+                    <p className="font-mono text-sm break-all">
+                      {booking.id}
+                    </p>
+                  </div>
 
-              <div>
-                <p className="text-xs text-zinc-400 mb-1.5">Reserved Seats</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {booking.seats?.map((seat) => (
-                    <span
-                      key={seat.id}
-                      className="px-2.5 py-1 bg-zinc-800 border border-zinc-700 text-orange-400 font-mono text-xs rounded-lg"
-                    >
-                      {seat.seatNumber}
-                    </span>
-                  ))}
+                  <span className="h-fit px-3 py-1 rounded-full text-sm bg-green-950 text-green-400">
+                    {booking.status}
+                  </span>
+                </div>
+
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-zinc-400 mb-1">
+                      Selected Seats
+                    </p>
+                    <p className="font-semibold">
+                      {booking.seats?.length
+                        ? booking.seats
+                            .map((seat) => seat.seatNumber)
+                            .join(', ')
+                        : 'Seat details unavailable'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-zinc-400 mb-1">
+                      Total Amount
+                    </p>
+                    <p className="font-semibold text-amber-400">
+                      ${(Number(booking.amount || 0) / 100).toFixed(2)}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-zinc-400 mb-1">
+                      Booking Date
+                    </p>
+                    <p>
+                      {new Date(booking.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-zinc-400 mb-1">
+                      Slot ID
+                    </p>
+                    <p className="font-mono text-sm break-all">
+                      {booking.slotId}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

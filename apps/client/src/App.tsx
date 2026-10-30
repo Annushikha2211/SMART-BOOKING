@@ -10,7 +10,7 @@ type AuthModalMode = 'NONE' | 'LOGIN' | 'SIGNUP_STEP_1' | 'SIGNUP_STEP_2' | 'FOR
 export const App: React.FC = () => {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [bookingConfirmed, setBookingConfirmed] = useState(false);
-  
+
   // Auth Modal State Management
   const [modalMode, setModalMode] = useState<AuthModalMode>('NONE');
   const [currentView, setCurrentView] = useState<'events' | 'booking' | 'my-tickets'>('events');
@@ -25,8 +25,6 @@ export const App: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Sample Slot ID
-  const sampleSlotId = "770f5a07-d3ee-4ec1-baad-f8e12c7a9967";
 
   const resetFormState = () => {
     setEmail('');
@@ -65,7 +63,7 @@ export const App: React.FC = () => {
       } else {
         setError(data.message || 'Login failed');
       }
-    } catch {
+    } catch (err) {
       setError('Server down or network error');
     } finally {
       setLoading(false);
@@ -91,7 +89,7 @@ export const App: React.FC = () => {
       } else {
         setError(data.message || 'Failed to send OTP');
       }
-    } catch {
+    } catch (err) {
       setError('Server down or network error');
     } finally {
       setLoading(false);
@@ -118,7 +116,7 @@ export const App: React.FC = () => {
       } else {
         setError(data.message || 'OTP verification failed');
       }
-    } catch {
+    } catch (err) {
       setError('Server down or network error');
     } finally {
       setLoading(false);
@@ -144,7 +142,7 @@ export const App: React.FC = () => {
       } else {
         setError(data.message || 'Failed to send reset code');
       }
-    } catch {
+    } catch (err) {
       setError('Server down or network error');
     } finally {
       setLoading(false);
@@ -171,7 +169,7 @@ export const App: React.FC = () => {
       } else {
         setError(data.message || 'Failed to reset password');
       }
-    } catch {
+    } catch (err) {
       setError('Server down or network error');
     } finally {
       setLoading(false);
@@ -180,7 +178,7 @@ export const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-black text-zinc-100 font-sans selection:bg-amber-500 selection:text-black">
-      <Navbar 
+      <Navbar
         onOpenLogin={() => { resetFormState(); setModalMode('LOGIN'); }}
         onOpenSignup={() => { resetFormState(); setModalMode('SIGNUP_STEP_1'); }}
         onOpenMyTickets={() => setCurrentView('my-tickets')}
@@ -190,62 +188,57 @@ export const App: React.FC = () => {
       <main className="max-w-7xl mx-auto px-8 pt-8">
         {currentView === 'my-tickets' ? (
           <MyTicketsPage onBack={() => setCurrentView('events')} />
-        ) : !selectedEvent ? (
-          <LandingPage onSelectEvent={(event) => { setSelectedEvent(event); setCurrentView('booking'); }} />
+        ) : selectedEvent ? (
+          <SeatBookingPage
+  event={selectedEvent}
+  slotId={selectedEvent.slotId || ''}
+  onBack={() => setSelectedEvent(null)}
+  onBookingComplete={() => {
+    setSelectedEvent(null);
+    setCurrentView('my-tickets');
+  }}
+/>
         ) : bookingConfirmed ? (
           <div className="text-center py-16 space-y-4">
-            <div className="w-16 h-16 bg-green-500/20 text-green-400 rounded-full flex items-center justify-center mx-auto text-3xl border border-green-500/40">
+            <div className="w-16 h-16 bg-green-500/20 text-green-400 rounded-full flex items-center justify-center mx-auto text-3xl border border-green-500/30">
               ✓
             </div>
-            <h2 className="text-3xl font-extrabold text-white">Booking Confirmed!</h2>
-            <p className="text-zinc-400 text-sm">Your seats have been booked successfully in the database.</p>
-            <div className="flex justify-center gap-4">
-              <button
-                onClick={() => {
-                  setBookingConfirmed(false);
-                  setSelectedEvent(null);
-                  setCurrentView('my-tickets');
-                }}
-                className="bg-zinc-800 text-zinc-200 font-bold px-6 py-2.5 rounded-xl text-sm hover:bg-zinc-700 transition border border-zinc-700"
-              >
-                View My Tickets
-              </button>
-              <button
-                onClick={() => {
-                  setBookingConfirmed(false);
-                  setSelectedEvent(null);
-                  setCurrentView('events');
-                }}
-                className="bg-amber-500 text-black font-bold px-6 py-2.5 rounded-xl text-sm hover:bg-amber-400 transition"
-              >
-                Book Another Event
-              </button>
-            </div>
+            <h2 className="text-3xl font-bold">Booking Confirmed!</h2>
+            <p className="text-zinc-400">Aapka ticket successfully book ho gaya hai aur email bhej di gayi hai.</p>
+            <button
+              onClick={() => setBookingConfirmed(false)}
+              className="mt-4 bg-amber-500 text-black font-bold px-6 py-2 rounded-lg hover:bg-amber-400"
+            >
+              Back to Events
+            </button>
           </div>
         ) : (
-          <SeatBookingPage
-            event={selectedEvent}
-            slotId={sampleSlotId}
-            onBack={() => { setSelectedEvent(null); setCurrentView('events'); }}
-            onBookingComplete={() => setBookingConfirmed(true)}
+          <LandingPage
+            onSelectEvent={(event) => setSelectedEvent(event)}
           />
         )}
       </main>
 
-      {/* --- AUTH MODAL SYSTEM --- */}
+      {/* AUTH MODALS OVERLAY */}
       {modalMode !== 'NONE' && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-md text-white space-y-4 shadow-2xl">
-            
-            {/* Status Messages */}
-            {error && <p className="text-red-400 text-xs bg-red-500/10 p-2.5 rounded border border-red-500/20">{error}</p>}
-            {successMsg && <p className="text-green-400 text-xs bg-green-500/10 p-2.5 rounded border border-green-500/20">{successMsg}</p>}
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl w-full max-w-md relative shadow-2xl">
+            <button
+              onClick={closeModal}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white text-lg font-bold"
+            >
+              ✕
+            </button>
 
-            {/* Mode 1: LOGIN */}
+            {error && <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg">{error}</div>}
+            {successMsg && <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 text-green-400 text-xs rounded-lg">{successMsg}</div>}
+
+            {/* Mode 1: Login */}
             {modalMode === 'LOGIN' && (
               <>
-                <h3 className="text-xl font-bold">Welcome Back</h3>
-                <form onSubmit={handleLogin} className="space-y-3">
+                <h3 className="text-xl font-bold mb-1">Welcome Back</h3>
+                <p className="text-xs text-zinc-400 mb-6">Login to access your bookings and tickets.</p>
+                <form onSubmit={handleLogin} className="space-y-4">
                   <div>
                     <label className="text-xs text-zinc-400 block mb-1">Email</label>
                     <input
@@ -297,11 +290,12 @@ export const App: React.FC = () => {
               </>
             )}
 
-            {/* Mode 2: SIGNUP STEP 1 */}
+            {/* Mode 2: Signup Step 1 */}
             {modalMode === 'SIGNUP_STEP_1' && (
               <>
-                <h3 className="text-xl font-bold">Create Account</h3>
-                <form onSubmit={handleSendSignupOTP} className="space-y-3">
+                <h3 className="text-xl font-bold mb-1">Create Account</h3>
+                <p className="text-xs text-zinc-400 mb-6">Enter your details to receive an OTP verification code.</p>
+                <form onSubmit={handleSendSignupOTP} className="space-y-4">
                   <div>
                     <label className="text-xs text-zinc-400 block mb-1">Full Name</label>
                     <input
@@ -355,12 +349,12 @@ export const App: React.FC = () => {
               </>
             )}
 
-            {/* Mode 3: SIGNUP STEP 2 */}
+            {/* Mode 3: Signup Step 2 */}
             {modalMode === 'SIGNUP_STEP_2' && (
               <>
-                <h3 className="text-xl font-bold">Enter OTP Code</h3>
-                <p className="text-xs text-zinc-400">We sent a 6-digit verification code to <span className="text-amber-500 font-medium">{email}</span></p>
-                <form onSubmit={handleVerifySignupOTP} className="space-y-3">
+                <h3 className="text-xl font-bold mb-1">Enter OTP Code</h3>
+                <p className="text-xs text-zinc-400 mb-6">We sent a 6-digit verification code to <span className="text-amber-500 font-medium">{email}</span></p>
+                <form onSubmit={handleVerifySignupOTP} className="space-y-4">
                   <div>
                     <label className="text-xs text-zinc-400 block mb-1">OTP Code</label>
                     <input
@@ -393,14 +387,14 @@ export const App: React.FC = () => {
               </>
             )}
 
-            {/* Mode 4: FORGOT PASSWORD STEP 1 */}
+            {/* Mode 4: Forgot Password Step 1 */}
             {modalMode === 'FORGOT_STEP_1' && (
               <>
-                <h3 className="text-xl font-bold">Reset Password</h3>
-                <p className="text-xs text-zinc-400">Enter your email to receive a password reset code.</p>
-                <form onSubmit={handleSendForgotOTP} className="space-y-3">
+                <h3 className="text-xl font-bold mb-1">Reset Password</h3>
+                <p className="text-xs text-zinc-400 mb-6">Enter your account email to receive a password reset OTP code.</p>
+                <form onSubmit={handleSendForgotOTP} className="space-y-4">
                   <div>
-                    <label className="text-xs text-zinc-400 block mb-1">Email</label>
+                    <label className="text-xs text-zinc-400 block mb-1">Email Address</label>
                     <input
                       type="email"
                       required
@@ -416,7 +410,7 @@ export const App: React.FC = () => {
                       onClick={() => setModalMode('LOGIN')}
                       className="bg-zinc-800 text-zinc-300 font-bold px-4 py-2 rounded-lg w-1/2 text-xs hover:bg-zinc-700 transition"
                     >
-                      Back
+                      Back to Login
                     </button>
                     <button
                       type="submit"
@@ -430,11 +424,12 @@ export const App: React.FC = () => {
               </>
             )}
 
-            {/* Mode 5: FORGOT PASSWORD STEP 2 */}
+            {/* Mode 5: Forgot Password Step 2 */}
             {modalMode === 'FORGOT_STEP_2' && (
               <>
-                <h3 className="text-xl font-bold">New Password</h3>
-                <form onSubmit={handleResetPassword} className="space-y-3">
+                <h3 className="text-xl font-bold mb-1">New Password</h3>
+                <p className="text-xs text-zinc-400 mb-6">Enter the OTP received and your new password.</p>
+                <form onSubmit={handleResetPassword} className="space-y-4">
                   <div>
                     <label className="text-xs text-zinc-400 block mb-1">OTP Code</label>
                     <input
@@ -477,7 +472,6 @@ export const App: React.FC = () => {
                 </form>
               </>
             )}
-
           </div>
         </div>
       )}
